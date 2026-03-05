@@ -1093,7 +1093,9 @@ async function initScramjet() {
     }
     try {
         printLine('[proxy] Loading scripts from CDN...', 'amber');
+        // Load in correct order: BareMux → Epoxy transport → Scramjet
         await loadScript(BAREMUX_CDN + 'index.js');
+        await loadScript('https://unpkg.com/@mercuryworkshop/epoxy-transport@3/dist/index.js');
         await loadScript(SCRAM_CDN + 'scramjet.all.js');
 
         // Build the SW script as a blob — importScripts inside a SW CAN be cross-origin
@@ -1141,9 +1143,8 @@ async function initScramjet() {
         await ctrl.init();
         window.__sj = ctrl;
 
-        // Init BareMux with Wisp transport
-        var conn = new BareMux.BareMuxConnection('./baremux-worker.js');
-        await conn.setTransport('./epoxy.js', [{ wisp: WISP_SERVER }]);
+        // Init BareMux — use SetTransport with the already-loaded EpoxyTransport module
+        await BareMux.SetTransport('EpxMod.EpoxyClient', { wisp: WISP_SERVER });
 
         proxySwReady = true;
         printLine('[proxy] Scramjet ready ✓', 'cyan');
