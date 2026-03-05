@@ -1111,13 +1111,11 @@ async function initScramjet() {
             '});'
         ].join('\n');
 
-        // Check existing registration
+        // Register real same-origin sw.js file (must exist in repo root)
         var existing = await navigator.serviceWorker.getRegistration('./');
         if (!existing || !existing.active) {
             printLine('[proxy] Registering service worker...', 'amber');
-            var blob = new Blob([swSrc], { type: 'application/javascript' });
-            var swUrl = URL.createObjectURL(blob);
-            var reg = await navigator.serviceWorker.register(swUrl, { scope: './' });
+            var reg = await navigator.serviceWorker.register('./sw.js', { scope: './' });
             await new Promise(function(resolve, reject) {
                 if (reg.active) { resolve(); return; }
                 var worker = reg.installing || reg.waiting;
