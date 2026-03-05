@@ -1066,77 +1066,96 @@ document.addEventListener('keydown', function(e) {
 });
 
 // ══ PROXY BROWSER ══════════════════════════════════════════
-// Scramjet proxy config — points to a public Scramjet/Wisp deployment
-// Scramjet CDN — no local files needed, pulled straight from jsDelivr
-var SCRAMJET_CDN  = 'https://cdn.jsdelivr.net/npm/@mercuryworkshop/scramjet@latest/dist/';
-var SCRAMJET_SW   = SCRAMJET_CDN + 'scramjet.worker.js';
-var SCRAMJET_BUNDLE = SCRAMJET_CDN + 'scramjet.all.js';
-var SCRAMJET_CODEC = 'xor';                  // encoding: xor | base64 | plain
-var WISP_SERVER   = 'wss://test.jsps.me/wisp/';
+var SCRAMJET_CDN   = 'https://cdn.jsdelivr.net/npm/@mercuryworkshop/scramjet@latest/dist/';
+var BAREMUX_CDN    = 'https://cdn.jsdelivr.net/npm/@mercuryworkshop/bare-mux@latest/dist/';
+var SCRAMJET_ALL   = SCRAMJET_CDN + 'scramjet.all.js';
+var BAREMUX_JS     = BAREMUX_CDN + 'index.js';
+var WISP_SERVER    = 'wss://test.jsps.me/wisp/';
+var SCRAMJET_SCOPE = '/scramjet-sw/';
 
-var PROXY_BASE = null;
-
+var proxySwReady = false;
 var proxyHistoryStack = [];
 var proxyHistoryIndex = -1;
-var proxySwReady = false;
+
+function loadScript(src) {
+    return new Promise(function(resolve, reject) {
+        if (document.querySelector('script[src="' + src + '"]')) { resolve(); return; }
+        var s = document.createElement('script');
+        s.src = src; s.onload = resolve; s.onerror = function(){ reject(new Error('Failed to load: ' + src)); };
+        document.head.appendChild(s);
+    });
+}
 
 async function initScramjet() {
     if (!('serviceWorker' in navigator)) {
-        printLine('[proxy] Service workers not supported in this browser.', 'red');
+        printLine('[proxy] Service workers not supported.', 'red');
         return false;
     }
     try {
-        // Check if already active
-        var existing = await navigator.serviceWorker.getRegistration('./');
-        if (existing && existing.active) {
-            proxySwReady = true;
-            return true;
+        printLine('[proxy] Loading Scramjet + BareMux from CDN...', 'amber');
+        await loadScript(BAREMUX_JS);
+        await loadScript(SCRAMJET_ALL);
+
+        // Configure BareMux transport to use our Wisp server
+        await BareMux.SetTransport('EpoxyClient', { wisp: WISP_SERVER });
+
+        // Check if SW already registered and active
+        var existing = await navigator.serviceWorker.getRegistration(SCRAMJET_SCOPE);
+        if (!existing || !existing.active) {
+            // Build inline SW that importScripts from CDN, register as blob
+            var swCode = [
+                'importScripts("' + SCRAMJET_ALL + '");',
+                'const { ScramjetServiceWorker } = $scramjetLoadWorker();',
+                'const sj = new ScramjetServiceWorker();',
+                'self.addEventListener("fetch", e => {',
+                '  if (sj.route(e)) e.respondWith(sj.fetch(e));',
+                '});'
+            ].join('\n');
+            var blob = new Blob([swCode], { type: 'application/javascript' });
+            var blobUrl = URL.createObjectURL(blob);
+            printLine('[proxy] Registering service worker...', 'amber');
+            var reg = await navigator.serviceWorker.register(blobUrl, { scope: SCRAMJET_SCOPE });
+            await new Promise(function(resolve, reject) {
+                if (reg.active) { resolve(); return; }
+                var sw = reg.installing || reg.waiting;
+                if (!sw) { reject(new Error('SW not found')); return; }
+                sw.addEventListener('statechange', function() {
+                    if (sw.state === 'activated') resolve();
+                    if (sw.state === 'redundant') reject(new Error('SW failed to activate'));
+                });
+                setTimeout(function() { reject(new Error('SW timeout')); }, 10000);
+            });
+            URL.revokeObjectURL(blobUrl);
         }
 
-        // Fetch the worker script from CDN and re-register as a same-origin blob
-        // (browsers block cross-origin SW registration directly)
-        printLine('[proxy] Fetching Scramjet worker from CDN...', 'amber');
-        var swResp = await fetch(SCRAMJET_SW);
-        if (!swResp.ok) throw new Error('CDN fetch failed: ' + swResp.status);
-        var swText = await swResp.text();
-
-        // Prepend the bundle import and wisp config into the worker
-        var bundleResp = await fetch(SCRAMJET_BUNDLE);
-        var bundleText = await bundleResp.text();
-        var wispConfig = 'const WISP_URL = "' + WISP_SERVER + '";\n';
-        var fullWorker = wispConfig + bundleText + '\n' + swText;
-
-        var blob = new Blob([fullWorker], { type: 'application/javascript' });
-        var blobUrl = URL.createObjectURL(blob);
-
-        var reg = await navigator.serviceWorker.register(blobUrl, { scope: './' });
-        await new Promise(function(resolve, reject) {
-            if (reg.active) { resolve(); return; }
-            var sw = reg.installing || reg.waiting;
-            if (!sw) { reject(new Error('No SW')); return; }
-            sw.addEventListener('statechange', function() {
-                if (sw.state === 'activated') resolve();
-                if (sw.state === 'redundant') reject(new Error('SW redundant'));
-            });
-            setTimeout(function(){ reject(new Error('SW timeout')); }, 8000);
+        // Init ScramjetController on the page
+        var ctrl = new ScramjetController({
+            prefix: SCRAMJET_SCOPE,
+            files: {
+                wasm:   SCRAMJET_CDN + 'scramjet.wasm.wasm',
+                worker: SCRAMJET_CDN + 'scramjet.worker.js',
+                client: SCRAMJET_CDN + 'scramjet.client.js',
+                shared: SCRAMJET_CDN + 'scramjet.shared.js',
+                sync:   SCRAMJET_CDN + 'scramjet.sync.js',
+            }
         });
-
-        URL.revokeObjectURL(blobUrl);
+        await ctrl.init();
+        window._scramjetCtrl = ctrl;
         proxySwReady = true;
-        printLine('[proxy] Scramjet ready.', 'cyan');
+        printLine('[proxy] Scramjet ready ✓', 'cyan');
         return true;
     } catch(e) {
         proxySwReady = false;
-        printLine('[proxy] SW init failed: ' + e.message, 'red');
+        printLine('[proxy] Init failed: ' + e.message, 'red');
         return false;
     }
 }
 
 function proxyEncodeUrl(url) {
-    // Scramjet XOR codec URL encoding (matches scramjet's default xor codec)
-    if (SCRAMJET_CODEC === 'plain') return url;
-    if (SCRAMJET_CODEC === 'base64') return btoa(url);
-    // xor with key 2 (Scramjet default)
+    if (window._scramjetCtrl) {
+        try { return window._scramjetCtrl.encodeUrl(url); } catch(e) {}
+    }
+    // fallback xor codec
     var enc = '';
     for (var i = 0; i < url.length; i++) enc += String.fromCharCode(url.charCodeAt(i) ^ 2);
     return btoa(enc);
@@ -1152,10 +1171,8 @@ function proxyBuildUrl(rawUrl) {
             url = 'https://' + url;
         }
     }
-    // Scramjet intercepts requests under the SW scope — encode the URL
-    return location.pathname.replace(/\/[^/]*$/, '/') + '~/scramjet/' + proxyEncodeUrl(url);
+    return SCRAMJET_SCOPE + proxyEncodeUrl(url);
 }
-
 function proxySetStatus(text) {
     document.getElementById('proxyStatus').textContent = text;
 }
