@@ -1142,8 +1142,8 @@ async function initScramjet() {
         window.__sj = ctrl;
 
         // Init BareMux with Wisp transport
-        var conn = new BareMux.BareMuxConnection(BAREMUX_CDN + 'worker.js');
-        await conn.setTransport('/epoxy/index.mjs', [{ wisp: WISP_SERVER }]);
+        var conn = new BareMux.BareMuxConnection('./baremux-worker.js');
+        await conn.setTransport('./epoxy.js', [{ wisp: WISP_SERVER }]);
 
         proxySwReady = true;
         printLine('[proxy] Scramjet ready ✓', 'cyan');
