@@ -10,3 +10,10 @@ self.addEventListener("fetch", (event) => {
         return fetch(event.request);
     })());
 });
+
+// Allow controller to push config into the SW
+self.addEventListener("message", (event) => {
+    if (event.data && event.data.scramjet$config) {
+        sj.config = event.data.scramjet$config;
+    }
+});
