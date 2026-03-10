@@ -1102,8 +1102,8 @@ async function initScramjet() {
         printLine('[proxy] Service worker active.', 'amber');
 
         // Set up BareMux Wisp transport
-        var conn = new BareMux.BareMuxConnection('./baremux-worker.js');
-        await conn.setTransport('./epoxy.mjs', [{ wisp: WISP_SERVER }]);
+        var conn = new BareMux.BareMuxConnection(location.origin + '/pikachu-terminal/baremux-worker.js');
+        await conn.setTransport(location.origin + '/pikachu-terminal/epoxy.js', [{ wisp: WISP_SERVER }]);
 
         // Init Scramjet controller
         var { ScramjetController } = $scramjetLoadController();
