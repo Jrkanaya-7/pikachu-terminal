@@ -1066,11 +1066,9 @@ document.addEventListener('keydown', function(e) {
 });
 
 // ══ PROXY BROWSER ══════════════════════════════════════════
-// All Scramjet files served from jsDelivr CDN
-var SCRAM_CDN    = 'https://cdn.jsdelivr.net/npm/@mercuryworkshop/scramjet@latest/dist/';
-var BAREMUX_CDN  = 'https://cdn.jsdelivr.net/npm/@mercuryworkshop/bare-mux@latest/dist/';
-var WISP_SERVER  = 'wss://test.jsps.me/wisp/';
-var SJ_PREFIX    = '/~/sj/';  // scramjet intercept prefix
+var SCRAM_CDN   = 'https://cdn.jsdelivr.net/npm/@mercuryworkshop/scramjet@latest/dist/';
+var WISP_SERVER = 'wss://test.jsps.me/wisp/';
+var SJ_SCOPE    = '/pikachu-terminal/';  // must match GitHub Pages path
 
 var proxySwReady = false;
 var proxyHistoryStack = [];
@@ -1082,7 +1080,7 @@ function loadScript(src) {
         var s = document.createElement('script');
         s.src = src;
         s.onload = resolve;
-        s.onerror = function() { reject(new Error('Failed to load ' + src)); };
+        s.onerror = function() { reject(new Error('Failed to load: ' + src)); };
         document.head.appendChild(s);
     });
 }
@@ -1092,59 +1090,33 @@ async function initScramjet() {
         printLine('[proxy] Service workers not supported.', 'red'); return false;
     }
     try {
-        printLine('[proxy] Loading scripts from CDN...', 'amber');
-        // Load in correct order: BareMux → Epoxy transport → Scramjet
-        await loadScript(BAREMUX_CDN + 'index.js');
-        await loadScript('https://unpkg.com/@mercuryworkshop/epoxy-transport@3/dist/index.js');
+        printLine('[proxy] Loading Scramjet...', 'amber');
+
+        await loadScript('https://cdn.jsdelivr.net/npm/@mercuryworkshop/bare-mux@latest/dist/index.js');
+        await loadScript('https://cdn.jsdelivr.net/npm/@mercuryworkshop/epoxy-transport@latest/dist/index.js');
         await loadScript(SCRAM_CDN + 'scramjet.all.js');
 
-        // Build the SW script as a blob — importScripts inside a SW CAN be cross-origin
-        // even though the SW registration itself must be same-origin
-        var swSrc = [
-            'importScripts("' + SCRAM_CDN + 'scramjet.all.js");',
-            'const { ScramjetServiceWorker } = $scramjetLoadWorker();',
-            'const sj = new ScramjetServiceWorker();',
-            'self.addEventListener("fetch", (event) => {',
-            '  event.respondWith((async () => {',
-            '    await sj.loadConfig();',
-            '    if (sj.route(event)) return sj.fetch(event);',
-            '    return fetch(event.request);',
-            '  })());',
-            '});'
-        ].join('\n');
+        // Register SW
+        var reg = await navigator.serviceWorker.register('./sw.js', { scope: SJ_SCOPE });
+        await navigator.serviceWorker.ready;
+        printLine('[proxy] Service worker active.', 'amber');
 
-        // Register real same-origin sw.js file (must exist in repo root)
-        var existing = await navigator.serviceWorker.getRegistration('./');
-        if (!existing || !existing.active) {
-            printLine('[proxy] Registering service worker...', 'amber');
-            var reg = await navigator.serviceWorker.register('./sw.js', { scope: './' });
-            await new Promise(function(resolve, reject) {
-                if (reg.active) { resolve(); return; }
-                var worker = reg.installing || reg.waiting;
-                if (!worker) { reject(new Error('No worker found')); return; }
-                worker.addEventListener('statechange', function() {
-                    if (worker.state === 'activated') resolve();
-                    if (worker.state === 'redundant') reject(new Error('SW activation failed'));
-                });
-                setTimeout(function() { reject(new Error('SW timed out')); }, 12000);
-            });
-        }
+        // Set up BareMux Wisp transport
+        var conn = new BareMux.BareMuxConnection('./baremux-worker.js');
+        await conn.setTransport('./epoxy.mjs', [{ wisp: WISP_SERVER }]);
 
-        // Init ScramjetController (loaded via scramjet.all.js)
+        // Init Scramjet controller
         var { ScramjetController } = $scramjetLoadController();
         var ctrl = new ScramjetController({
-            prefix: SJ_PREFIX,
+            prefix: SJ_SCOPE + 'scramjet/',
             files: {
                 wasm: SCRAM_CDN + 'scramjet.wasm.wasm',
                 all:  SCRAM_CDN + 'scramjet.all.js',
                 sync: SCRAM_CDN + 'scramjet.sync.js',
             }
         });
-        await ctrl.init();
+        await ctrl.init(SJ_SCOPE + 'sw.js');
         window.__sj = ctrl;
-
-        // Init BareMux — use SetTransport with the already-loaded EpoxyTransport module
-        await BareMux.SetTransport('EpxMod.EpoxyClient', { wisp: WISP_SERVER });
 
         proxySwReady = true;
         printLine('[proxy] Scramjet ready ✓', 'cyan');
@@ -1152,7 +1124,7 @@ async function initScramjet() {
     } catch(e) {
         proxySwReady = false;
         printLine('[proxy] Init failed: ' + e.message, 'red');
-        console.error('[scramjet init]', e);
+        console.error('[scramjet]', e);
         return false;
     }
 }
@@ -1168,12 +1140,9 @@ function proxyBuildUrl(rawUrl) {
         }
     }
     if (window.__sj) {
-        try { return window.__sj.encodeUrl(url); } catch(e) {}
+        try { return window.__sj.encodeUrl(url); } catch(e) { console.error('encodeUrl failed', e); }
     }
-    // fallback: manual xor encode into prefix
-    var enc = '';
-    for (var i = 0; i < url.length; i++) enc += String.fromCharCode(url.charCodeAt(i) ^ 2);
-    return SJ_PREFIX + btoa(enc);
+    return null;
 }
 function proxySetStatus(text) {
     document.getElementById('proxyStatus').textContent = text;
