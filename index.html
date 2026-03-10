@@ -1101,13 +1101,8 @@ async function initScramjet() {
         await navigator.serviceWorker.ready;
         printLine('[proxy] Service worker active.', 'amber');
 
-        // Set up BareMux Wisp transport
-        // SharedWorker requires same-origin — fetch worker from CDN and serve as blob
-        var workerResp = await fetch('https://cdn.jsdelivr.net/npm/@mercuryworkshop/bare-mux@latest/dist/worker.js');
-        var workerText = await workerResp.text();
-        var workerBlob = new Blob([workerText], { type: 'application/javascript' });
-        var workerUrl = URL.createObjectURL(workerBlob);
-        var conn = new BareMux.BareMuxConnection(workerUrl);
+        // Set up BareMux transport using same-origin worker + epoxy.js
+        var conn = new BareMux.BareMuxConnection(location.origin + '/pikachu-terminal/baremux-worker.js');
         await conn.setTransport(location.origin + '/pikachu-terminal/epoxy.js', [{ wisp: WISP_SERVER }]);
 
         // Init Scramjet controller
